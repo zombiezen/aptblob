@@ -19,3 +19,7 @@ EOF
 
 go run . upload -k $KEYID "$BUCKET" stable mypackage.deb
 ```
+
+## License
+
+[Apache 2.0](LICENSE)
