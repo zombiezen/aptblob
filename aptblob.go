@@ -35,7 +35,7 @@ import (
 	"zombiezen.com/go/aptblob/internal/deb"
 )
 
-func cmdInit(ctx context.Context, bucket *blob.Bucket, dist string, keyID string) error {
+func cmdInit(ctx context.Context, bucket *blob.Bucket, dist distribution, keyID string) error {
 	fmt.Fprintln(os.Stderr, "aptblob: reading Release from stdin...")
 	newRelease, err := deb.ParseReleaseIndex(os.Stdin)
 	if err != nil {
@@ -58,8 +58,8 @@ func cmdInit(ctx context.Context, bucket *blob.Bucket, dist string, keyID string
 	return nil
 }
 
-func downloadReleaseIndex(ctx context.Context, bucket *blob.Bucket, dist string) (deb.Paragraph, error) {
-	key := releaseIndexPath(dist)
+func downloadReleaseIndex(ctx context.Context, bucket *blob.Bucket, dist distribution) (deb.Paragraph, error) {
+	key := dist.indexPath()
 	blob, err := bucket.NewReader(ctx, key, nil)
 	if err != nil {
 		if gcerrors.Code(err) == gcerrors.NotFound {
@@ -77,7 +77,7 @@ func downloadReleaseIndex(ctx context.Context, bucket *blob.Bucket, dist string)
 
 const componentName = "main"
 
-func cmdUpload(ctx context.Context, bucket *blob.Bucket, dist string, keyID string, debPath string) error {
+func cmdUpload(ctx context.Context, bucket *blob.Bucket, dist distribution, keyID string, debPath string) error {
 	// Extract package metadata.
 	debFile, err := os.Open(debPath)
 	if err != nil {
@@ -96,11 +96,12 @@ func cmdUpload(ctx context.Context, bucket *blob.Bucket, dist string, keyID stri
 		}
 	}
 	newPackage := p.Paragraph()
+	promotePackageField(newPackage)
 	arch := newPackage.Get("Architecture")
 	if arch == "" {
 		return fmt.Errorf("%s: no Architecture", debPath)
 	}
-	poolPath := "pool/" + filepath.Base(debPath)
+	poolPath := poolPath(filepath.Base(debPath))
 	packageHashes, err := upload(ctx, bucket, poolPath, "application/vnd.debian.binary-package", "immutable", debFile)
 	if err != nil {
 		return err
@@ -113,7 +114,8 @@ func cmdUpload(ctx context.Context, bucket *blob.Bucket, dist string, keyID stri
 
 	// List existing packages.
 	var packages []deb.Paragraph
-	if packagesReader, err := bucket.NewReader(ctx, binaryPackagesIndexPath(dist, componentName, arch), nil); err == nil {
+	comp := component{dist: dist, name: componentName}
+	if packagesReader, err := bucket.NewReader(ctx, comp.binaryIndexPath(arch), nil); err == nil {
 		p := deb.NewParser(packagesReader)
 		p.Fields = deb.ControlFields
 		for p.Next() {
@@ -121,7 +123,7 @@ func cmdUpload(ctx context.Context, bucket *blob.Bucket, dist string, keyID stri
 		}
 		packagesReader.Close()
 		if err := p.Err(); err != nil {
-			return fmt.Errorf("%s: %w", binaryPackagesIndexPath(dist, componentName, arch), err)
+			return fmt.Errorf("%s: %w", comp.binaryIndexPath(arch), err)
 		}
 	} else if gcerrors.Code(err) != gcerrors.NotFound {
 		return err
@@ -129,8 +131,8 @@ func cmdUpload(ctx context.Context, bucket *blob.Bucket, dist string, keyID stri
 
 	// Append package to index.
 	packages = append(packages, newPackage)
-	packageIndexHashes, packageIndexGzipHashes, err := uploadPackageIndex(
-		ctx, bucket, dist, componentName, arch, packages)
+	packageIndexHashes, packageIndexGzipHashes, err :=
+		uploadPackageIndex(ctx, bucket, comp, arch, packages)
 	if err != nil {
 		return err
 	}
@@ -140,14 +142,8 @@ func cmdUpload(ctx context.Context, bucket *blob.Bucket, dist string, keyID stri
 	if err != nil {
 		return err
 	}
-	packagesDistPath := strings.TrimPrefix(
-		binaryPackagesIndexPath(dist, componentName, arch),
-		distDirPath(dist)+"/",
-	)
-	packagesGzipDistPath := strings.TrimPrefix(
-		binaryPackagesGzipIndexPath(dist, componentName, arch),
-		distDirPath(dist)+"/",
-	)
+	packagesDistPath := strings.TrimPrefix(comp.binaryIndexPath(arch), dist.dir()+"/")
+	packagesGzipDistPath := strings.TrimPrefix(comp.binaryIndexGzipPath(arch), dist.dir()+"/")
 	err = updateSignature(&release, "MD5Sum",
 		deb.IndexSignature{
 			Filename: packagesDistPath,
@@ -161,7 +157,7 @@ func cmdUpload(ctx context.Context, bucket *blob.Bucket, dist string, keyID stri
 		},
 	)
 	if err != nil {
-		return fmt.Errorf("%s: %w", releaseIndexPath(dist), err)
+		return fmt.Errorf("%s: %w", dist.indexPath(), err)
 	}
 	err = updateSignature(&release, "SHA1",
 		deb.IndexSignature{
@@ -176,7 +172,7 @@ func cmdUpload(ctx context.Context, bucket *blob.Bucket, dist string, keyID stri
 		},
 	)
 	if err != nil {
-		return fmt.Errorf("%s: %w", releaseIndexPath(dist), err)
+		return fmt.Errorf("%s: %w", dist.indexPath(), err)
 	}
 	err = updateSignature(&release, "SHA256",
 		deb.IndexSignature{
@@ -191,7 +187,7 @@ func cmdUpload(ctx context.Context, bucket *blob.Bucket, dist string, keyID stri
 		},
 	)
 	if err != nil {
-		return fmt.Errorf("%s: %w", releaseIndexPath(dist), err)
+		return fmt.Errorf("%s: %w", dist.indexPath(), err)
 	}
 	if err := uploadReleaseIndex(ctx, bucket, dist, release, keyID); err != nil {
 		return err
@@ -238,6 +234,20 @@ func updateSignature(para *deb.Paragraph, key string, newSigs ...deb.IndexSignat
 	return nil
 }
 
+// promotePackageField ensures the Package field is the first in the paragraph.
+// It modifies the paragraph in-place.
+//
+// This is necessary for Packages and Sources paragraphs to be spec-compliant.
+func promotePackageField(para deb.Paragraph) {
+	for i, f := range para {
+		if f.Name == "Package" {
+			copy(para[1:], para[:i])
+			para[0] = f
+			return
+		}
+	}
+}
+
 func main() {
 	rootCmd := &cobra.Command{
 		Use:           "aptblob",
@@ -265,7 +275,7 @@ func main() {
 			if err != nil {
 				return err
 			}
-			return cmdInit(cmd.Context(), bucket, args[1], *keyID)
+			return cmdInit(cmd.Context(), bucket, distribution(args[1]), *keyID)
 		},
 	})
 	rootCmd.AddCommand(&cobra.Command{
@@ -280,7 +290,7 @@ func main() {
 			if err != nil {
 				return err
 			}
-			return cmdUpload(cmd.Context(), bucket, args[1], *keyID, args[2])
+			return cmdUpload(cmd.Context(), bucket, distribution(args[1]), *keyID, args[2])
 		},
 	})
 	if err := rootCmd.Execute(); err != nil {

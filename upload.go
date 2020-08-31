@@ -36,34 +36,45 @@ func poolPath(name string) string {
 	return "pool/" + name
 }
 
-func distDirPath(dist string) string {
-	return "dists/" + dist
+type distribution string
+
+func (dist distribution) dir() string {
+	return "dists/" + string(dist)
 }
 
-func releaseIndexPath(dist string) string {
-	return distDirPath(dist) + "/Release"
+func (dist distribution) indexPath() string {
+	return dist.dir() + "/Release"
 }
 
-func signedReleaseIndexPath(dist string) string {
-	return distDirPath(dist) + "/InRelease"
+func (dist distribution) signedIndexPath() string {
+	return dist.dir() + "/InRelease"
 }
 
-func releaseSignatureIndexPath(dist string) string {
-	return distDirPath(dist) + "/Release.gpg"
+func (dist distribution) indexSignaturePath() string {
+	return dist.dir() + "/Release.gpg"
 }
 
-func binaryPackagesIndexPath(dist, component, arch string) string {
-	return distDirPath(dist) + "/" + component + "/binary-" + arch + "/Packages"
+type component struct {
+	dist distribution
+	name string
 }
 
-func binaryPackagesGzipIndexPath(dist, component, arch string) string {
-	return distDirPath(dist) + "/" + component + "/binary-" + arch + "/Packages.gz"
+func (comp component) dir() string {
+	return comp.dist.dir() + "/" + comp.name
 }
 
-func uploadReleaseIndex(ctx context.Context, bucket *blob.Bucket, dist string, release deb.Paragraph, keyID string) error {
+func (comp component) binaryIndexPath(arch string) string {
+	return comp.dir() + "/binary-" + arch + "/Packages"
+}
+
+func (comp component) binaryIndexGzipPath(arch string) string {
+	return comp.binaryIndexPath(arch) + ".gz"
+}
+
+func uploadReleaseIndex(ctx context.Context, bucket *blob.Bucket, dist distribution, release deb.Paragraph, keyID string) error {
 	data := new(bytes.Buffer)
 	deb.Save(data, []deb.Paragraph{release})
-	err := bucket.WriteAll(ctx, releaseIndexPath(dist), data.Bytes(), &blob.WriterOptions{
+	err := bucket.WriteAll(ctx, dist.indexPath(), data.Bytes(), &blob.WriterOptions{
 		ContentType: "text/plain; charset=utf-8",
 	})
 	if err != nil {
@@ -82,7 +93,7 @@ func uploadReleaseIndex(ctx context.Context, bucket *blob.Bucket, dist string, r
 	if err := clearSign.Run(); err != nil {
 		return fmt.Errorf("generate InRelease: %w", err)
 	}
-	err = bucket.WriteAll(ctx, signedReleaseIndexPath(dist), clearSignOutput.Bytes(), &blob.WriterOptions{
+	err = bucket.WriteAll(ctx, dist.signedIndexPath(), clearSignOutput.Bytes(), &blob.WriterOptions{
 		ContentType: "text/plain; charset=utf-8",
 	})
 	if err != nil {
@@ -97,7 +108,7 @@ func uploadReleaseIndex(ctx context.Context, bucket *blob.Bucket, dist string, r
 	if err := detachSign.Run(); err != nil {
 		return fmt.Errorf("generate Release.gpg: %w", err)
 	}
-	err = bucket.WriteAll(ctx, releaseSignatureIndexPath(dist), detachSignOutput.Bytes(), &blob.WriterOptions{
+	err = bucket.WriteAll(ctx, dist.indexSignaturePath(), detachSignOutput.Bytes(), &blob.WriterOptions{
 		ContentType: "text/plain; charset=utf-8",
 	})
 	if err != nil {
@@ -113,12 +124,12 @@ type indexHashes struct {
 	sha256 [sha256.Size]byte
 }
 
-func uploadPackageIndex(ctx context.Context, bucket *blob.Bucket, dist, component, arch string, packages []deb.Paragraph) (uncompressed, compressed indexHashes, err error) {
+func uploadPackageIndex(ctx context.Context, bucket *blob.Bucket, comp component, arch string, packages []deb.Paragraph) (uncompressed, compressed indexHashes, err error) {
 	buf := new(bytes.Buffer)
 	if err := deb.Save(buf, packages); err != nil {
 		return indexHashes{}, indexHashes{}, err
 	}
-	key := binaryPackagesIndexPath(dist, component, arch)
+	key := comp.binaryIndexPath(arch)
 	uncompressed, err = upload(ctx, bucket, key, "text/plain; charset=utf-8", "", bytes.NewReader(buf.Bytes()))
 	if err != nil {
 		return indexHashes{}, indexHashes{}, err
@@ -131,7 +142,7 @@ func uploadPackageIndex(ctx context.Context, bucket *blob.Bucket, dist, componen
 	if err := zw.Close(); err != nil {
 		return indexHashes{}, indexHashes{}, fmt.Errorf("compress %s: %w", key, err)
 	}
-	compressed, err = upload(ctx, bucket, binaryPackagesGzipIndexPath(dist, component, arch), "application/gzip", "", bytes.NewReader(gzipBuf.Bytes()))
+	compressed, err = upload(ctx, bucket, comp.binaryIndexGzipPath(arch), "application/gzip", "", bytes.NewReader(gzipBuf.Bytes()))
 	if err != nil {
 		return indexHashes{}, indexHashes{}, err
 	}
