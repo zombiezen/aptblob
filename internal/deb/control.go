@@ -236,18 +236,50 @@ type Field struct {
 // String formats the field as a line in a "Release" file.
 func (f Field) String() string {
 	sb := new(strings.Builder)
-	f.appendTo(sb)
+	f.write(sb)
 	return sb.String()
 }
 
-func (f Field) appendTo(sb *strings.Builder) {
-	sb.WriteString(f.Name)
-	sb.WriteString(": ")
-	sb.WriteString(f.Value)
+var fieldSep = []byte(": ")
+
+func (f Field) write(w io.Writer) error {
+	if _, err := io.WriteString(w, f.Name); err != nil {
+		return err
+	}
+	if _, err := w.Write(fieldSep); err != nil {
+		return err
+	}
+	if _, err := io.WriteString(w, f.Value); err != nil {
+		return err
+	}
+	return nil
 }
 
 // Paragraph is an ordered mapping of fields in a control file.
 type Paragraph []Field
+
+var newlines = []byte{'\n', '\n'}
+
+// Save writes a list of paragraphs to a writer.
+func Save(w io.Writer, paragraphs []Paragraph) error {
+	if len(paragraphs) == 0 {
+		return nil
+	}
+	for i, p := range paragraphs {
+		if i > 0 {
+			if _, err := w.Write(newlines); err != nil {
+				return fmt.Errorf("save debian control file: %w", err)
+			}
+		}
+		if err := p.write(w); err != nil {
+			return fmt.Errorf("save debian control file: %w", err)
+		}
+	}
+	if _, err := w.Write(newlines[:1]); err != nil {
+		return fmt.Errorf("save debian control file: %w", err)
+	}
+	return nil
+}
 
 func (m Paragraph) find(name string) int {
 	for i, f := range m {
@@ -281,17 +313,22 @@ func (para *Paragraph) Set(name, value string) {
 // String formats the fields as lines in a "Release" file.
 func (m Paragraph) String() string {
 	sb := new(strings.Builder)
-	m.appendTo(sb)
+	m.write(sb)
 	return sb.String()
 }
 
-func (m Paragraph) appendTo(sb *strings.Builder) {
+func (m Paragraph) write(w io.Writer) error {
 	for i, f := range m {
 		if i > 0 {
-			sb.WriteByte('\n')
+			if _, err := w.Write(newlines[:1]); err != nil {
+				return err
+			}
 		}
-		f.appendTo(sb)
+		if err := f.write(w); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 func isEmptyLine(line []byte) bool {
