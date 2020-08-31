@@ -26,10 +26,14 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"io/ioutil"
+	"mime"
 	"os"
 	"os/exec"
+	slashpath "path"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"gocloud.dev/blob"
 	"zombiezen.com/go/aptblob/internal/deb"
@@ -66,8 +70,8 @@ func (comp component) binaryIndexPath(arch string) string {
 	return comp.dir() + "/binary-" + arch + "/Packages"
 }
 
-func (comp component) binaryIndexGzipPath(arch string) string {
-	return comp.binaryIndexPath(arch) + ".gz"
+func (comp component) sourceIndexPath() string {
+	return comp.dir() + "/source/Sources"
 }
 
 func uploadReleaseIndex(ctx context.Context, bucket *blob.Bucket, dist distribution, release deb.Paragraph, keyID string) error {
@@ -123,12 +127,13 @@ type indexHashes struct {
 	sha256 [sha256.Size]byte
 }
 
-func uploadPackageIndex(ctx context.Context, bucket *blob.Bucket, comp component, arch string, packages []deb.Paragraph) (uncompressed, compressed indexHashes, err error) {
+const gzipExtension = ".gz"
+
+func uploadIndex(ctx context.Context, bucket *blob.Bucket, key string, packages []deb.Paragraph) (uncompressed, gzipped indexHashes, err error) {
 	buf := new(bytes.Buffer)
 	if err := deb.Save(buf, packages); err != nil {
 		return indexHashes{}, indexHashes{}, err
 	}
-	key := comp.binaryIndexPath(arch)
 	uncompressed, err = upload(ctx, bucket, key, "text/plain; charset=utf-8", "", bytes.NewReader(buf.Bytes()))
 	if err != nil {
 		return indexHashes{}, indexHashes{}, err
@@ -141,7 +146,7 @@ func uploadPackageIndex(ctx context.Context, bucket *blob.Bucket, comp component
 	if err := zw.Close(); err != nil {
 		return indexHashes{}, indexHashes{}, fmt.Errorf("compress %s: %w", key, err)
 	}
-	compressed, err = upload(ctx, bucket, comp.binaryIndexGzipPath(arch), "application/gzip", "", bytes.NewReader(gzipBuf.Bytes()))
+	gzipped, err = upload(ctx, bucket, key+gzipExtension, "application/gzip", "", bytes.NewReader(gzipBuf.Bytes()))
 	if err != nil {
 		return indexHashes{}, indexHashes{}, err
 	}
@@ -163,8 +168,9 @@ func uploadBinaryPackage(ctx context.Context, bucket *blob.Bucket, debPath strin
 	p.Fields = deb.ControlFields
 	if !p.Single() {
 		if err := p.Err(); err != nil {
-			return nil, fmt.Errorf("upload binary package %s: %w", debName, err)
+			return nil, fmt.Errorf("upload binary package %s: control: %w", debName, err)
 		}
+		return nil, fmt.Errorf("upload binary package %s: control: empty file", debName)
 	}
 	pkg := p.Paragraph()
 	promotePackageField(pkg)
@@ -182,6 +188,72 @@ func uploadBinaryPackage(ctx context.Context, bucket *blob.Bucket, debPath strin
 	pkg.Set("SHA1", hex.EncodeToString(packageHashes.sha1[:]))
 	pkg.Set("SHA256", hex.EncodeToString(packageHashes.sha256[:]))
 	return pkg, nil
+}
+
+func uploadSourcePackage(ctx context.Context, bucket *blob.Bucket, dscPath string) (deb.Paragraph, error) {
+	packageName := strings.TrimSuffix(filepath.Base(dscPath), ".dsc")
+	dsc, err := ioutil.ReadFile(dscPath)
+	if err != nil {
+		return nil, fmt.Errorf("upload source package %s: %w", packageName, err)
+	}
+	p := deb.NewParser(bytes.NewReader(dsc))
+	p.Fields = deb.SourceControlFields
+	if !p.Single() {
+		if err := p.Err(); err != nil {
+			return nil, fmt.Errorf("upload source package %s: %w", packageName, err)
+		}
+		return nil, fmt.Errorf("upload source package %s: empty file", packageName)
+	}
+	pkg := p.Paragraph()
+	dir := poolPath(packageName)
+	transformSourceControl(&pkg, dir)
+	files, err := deb.ParseIndexSignatures(pkg.Get("Files"), md5.Size)
+	if err != nil {
+		return nil, fmt.Errorf("upload source package %s: files: %w", packageName, err)
+	}
+	for _, sig := range files {
+		fname := sig.Filename
+		contentType := mime.TypeByExtension(slashpath.Ext(fname))
+		if contentType == "" {
+			contentType = "application/octet-stream"
+		}
+		content, err := os.Open(filepath.Join(filepath.Dir(dscPath), fname))
+		if err != nil {
+			return nil, fmt.Errorf("upload source package %s: %s: %w", packageName, fname, err)
+		}
+		_, uploadErr := upload(ctx, bucket, dir+"/"+fname, contentType, "immutable", content)
+		content.Close()
+		if uploadErr != nil {
+			return nil, fmt.Errorf("upload source package %s: %s: %w", packageName, fname, err)
+		}
+	}
+	return pkg, nil
+}
+
+// promotePackageField ensures the Package field is the first in the paragraph.
+// It modifies the paragraph in-place.
+//
+// This is necessary for Packages and Sources paragraphs to be spec-compliant.
+func promotePackageField(para deb.Paragraph) {
+	for i, f := range para {
+		if f.Name == "Package" {
+			copy(para[1:], para[:i])
+			para[0] = f
+			return
+		}
+	}
+}
+
+// transformSourceControl changes a Debian source control paragraph to a Sources
+// index paragraph.
+func transformSourceControl(para *deb.Paragraph, dir string) {
+	for i := range *para {
+		if (*para)[i].Name == "Source" {
+			(*para)[i].Name = "Package"
+		}
+	}
+	promotePackageField(*para)
+	para.Set("Directory", dir)
 }
 
 func poolPath(name string) string {

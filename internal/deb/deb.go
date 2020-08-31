@@ -105,11 +105,14 @@ func ExtractControl(r io.Reader) ([]byte, error) {
 
 // ControlFields is the set of fields in the binary package control file.
 var ControlFields = map[string]FieldType{
+	"Description": Multiline,
+}
+
+// SourceControlFields is the set of fields in the source package control file.
+var SourceControlFields = map[string]FieldType{
 	"Binary":           Folded,
-	"Changes":          Multiline,
 	"Checksums-Sha1":   Multiline,
 	"Checksums-Sha256": Multiline,
-	"Description":      Multiline,
 	"Dgit":             Folded,
 	"Files":            Multiline,
 	"Package-List":     Multiline,
