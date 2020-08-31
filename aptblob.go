@@ -17,13 +17,9 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/hex"
 	"fmt"
 	"os"
-	"path/filepath"
-	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -75,121 +71,106 @@ func downloadReleaseIndex(ctx context.Context, bucket *blob.Bucket, dist distrib
 	return index, nil
 }
 
-const componentName = "main"
-
-func cmdUpload(ctx context.Context, bucket *blob.Bucket, dist distribution, keyID string, debPath string) error {
-	// Extract package metadata.
-	debFile, err := os.Open(debPath)
+func cmdUpload(ctx context.Context, bucket *blob.Bucket, comp component, keyID string, paths []string) error {
+	release, err := downloadReleaseIndex(ctx, bucket, comp.dist)
 	if err != nil {
 		return err
 	}
-	defer debFile.Close()
-	control, err := deb.ExtractControl(debFile)
-	if err != nil {
-		return fmt.Errorf("%s: %w", debPath, err)
+	addToTokenSet(&release, "Components", comp.name)
+
+	binaryAdditions := make(map[string][]deb.Paragraph)
+	for _, path := range paths {
+		pkg, err := uploadBinaryPackage(ctx, bucket, path)
+		if err != nil {
+			return err
+		}
+		arch := pkg.Get("Architecture")
+		if arch == "all" {
+			for _, arch := range strings.Fields(release.Get("Architectures")) {
+				binaryAdditions[arch] = append(binaryAdditions[arch], pkg)
+			}
+			continue
+		}
+		addToTokenSet(&release, "Architectures", arch)
+		binaryAdditions[arch] = append(binaryAdditions[arch], pkg)
 	}
-	p := deb.NewParser(bytes.NewReader(control))
-	p.Fields = deb.ControlFields
-	if !p.Single() {
-		if err := p.Err(); err != nil {
-			return fmt.Errorf("%s: %w", debPath, err)
+
+	for arch, newPackages := range binaryAdditions {
+		// List existing packages.
+		var packages []deb.Paragraph
+		if packagesReader, err := bucket.NewReader(ctx, comp.binaryIndexPath(arch), nil); err == nil {
+			p := deb.NewParser(packagesReader)
+			p.Fields = deb.ControlFields
+			for p.Next() {
+				packages = append(packages, p.Paragraph())
+			}
+			packagesReader.Close()
+			if err := p.Err(); err != nil {
+				return fmt.Errorf("%s: %w", comp.binaryIndexPath(arch), err)
+			}
+		} else if gcerrors.Code(err) != gcerrors.NotFound {
+			return err
+		}
+
+		// Append packages to index.
+		packages = append(packages, newPackages...)
+		packageIndexHashes, packageIndexGzipHashes, err :=
+			uploadPackageIndex(ctx, bucket, comp, arch, packages)
+		if err != nil {
+			return err
+		}
+
+		// Update release signatures.
+		packagesDistPath := strings.TrimPrefix(comp.binaryIndexPath(arch), comp.dist.dir()+"/")
+		packagesGzipDistPath := strings.TrimPrefix(comp.binaryIndexGzipPath(arch), comp.dist.dir()+"/")
+		err = updateSignature(&release, "MD5Sum",
+			deb.IndexSignature{
+				Filename: packagesDistPath,
+				Checksum: packageIndexHashes.md5[:],
+				Size:     packageIndexHashes.size,
+			},
+			deb.IndexSignature{
+				Filename: packagesGzipDistPath,
+				Checksum: packageIndexGzipHashes.md5[:],
+				Size:     packageIndexGzipHashes.size,
+			},
+		)
+		if err != nil {
+			return fmt.Errorf("%s: %w", comp.dist.indexPath(), err)
+		}
+		err = updateSignature(&release, "SHA1",
+			deb.IndexSignature{
+				Filename: packagesDistPath,
+				Checksum: packageIndexHashes.sha1[:],
+				Size:     packageIndexHashes.size,
+			},
+			deb.IndexSignature{
+				Filename: packagesGzipDistPath,
+				Checksum: packageIndexGzipHashes.sha1[:],
+				Size:     packageIndexGzipHashes.size,
+			},
+		)
+		if err != nil {
+			return fmt.Errorf("%s: %w", comp.dist.indexPath(), err)
+		}
+		err = updateSignature(&release, "SHA256",
+			deb.IndexSignature{
+				Filename: packagesDistPath,
+				Checksum: packageIndexHashes.sha256[:],
+				Size:     packageIndexHashes.size,
+			},
+			deb.IndexSignature{
+				Filename: packagesGzipDistPath,
+				Checksum: packageIndexGzipHashes.sha256[:],
+				Size:     packageIndexGzipHashes.size,
+			},
+		)
+		if err != nil {
+			return fmt.Errorf("%s: %w", comp.dist.indexPath(), err)
 		}
 	}
-	newPackage := p.Paragraph()
-	promotePackageField(newPackage)
-	arch := newPackage.Get("Architecture")
-	if arch == "" {
-		return fmt.Errorf("%s: no Architecture", debPath)
-	}
-	poolPath := poolPath(filepath.Base(debPath))
-	packageHashes, err := upload(ctx, bucket, poolPath, "application/vnd.debian.binary-package", "immutable", debFile)
-	if err != nil {
-		return err
-	}
-	newPackage.Set("Filename", poolPath)
-	newPackage.Set("Size", strconv.FormatInt(packageHashes.size, 10))
-	newPackage.Set("MD5sum", hex.EncodeToString(packageHashes.md5[:]))
-	newPackage.Set("SHA1", hex.EncodeToString(packageHashes.sha1[:]))
-	newPackage.Set("SHA256", hex.EncodeToString(packageHashes.sha256[:]))
 
-	// List existing packages.
-	var packages []deb.Paragraph
-	comp := component{dist: dist, name: componentName}
-	if packagesReader, err := bucket.NewReader(ctx, comp.binaryIndexPath(arch), nil); err == nil {
-		p := deb.NewParser(packagesReader)
-		p.Fields = deb.ControlFields
-		for p.Next() {
-			packages = append(packages, p.Paragraph())
-		}
-		packagesReader.Close()
-		if err := p.Err(); err != nil {
-			return fmt.Errorf("%s: %w", comp.binaryIndexPath(arch), err)
-		}
-	} else if gcerrors.Code(err) != gcerrors.NotFound {
-		return err
-	}
-
-	// Append package to index.
-	packages = append(packages, newPackage)
-	packageIndexHashes, packageIndexGzipHashes, err :=
-		uploadPackageIndex(ctx, bucket, comp, arch, packages)
-	if err != nil {
-		return err
-	}
-
-	// Update release index.
-	release, err := downloadReleaseIndex(ctx, bucket, dist)
-	if err != nil {
-		return err
-	}
-	packagesDistPath := strings.TrimPrefix(comp.binaryIndexPath(arch), dist.dir()+"/")
-	packagesGzipDistPath := strings.TrimPrefix(comp.binaryIndexGzipPath(arch), dist.dir()+"/")
-	err = updateSignature(&release, "MD5Sum",
-		deb.IndexSignature{
-			Filename: packagesDistPath,
-			Checksum: packageIndexHashes.md5[:],
-			Size:     packageIndexHashes.size,
-		},
-		deb.IndexSignature{
-			Filename: packagesGzipDistPath,
-			Checksum: packageIndexGzipHashes.md5[:],
-			Size:     packageIndexGzipHashes.size,
-		},
-	)
-	if err != nil {
-		return fmt.Errorf("%s: %w", dist.indexPath(), err)
-	}
-	err = updateSignature(&release, "SHA1",
-		deb.IndexSignature{
-			Filename: packagesDistPath,
-			Checksum: packageIndexHashes.sha1[:],
-			Size:     packageIndexHashes.size,
-		},
-		deb.IndexSignature{
-			Filename: packagesGzipDistPath,
-			Checksum: packageIndexGzipHashes.sha1[:],
-			Size:     packageIndexGzipHashes.size,
-		},
-	)
-	if err != nil {
-		return fmt.Errorf("%s: %w", dist.indexPath(), err)
-	}
-	err = updateSignature(&release, "SHA256",
-		deb.IndexSignature{
-			Filename: packagesDistPath,
-			Checksum: packageIndexHashes.sha256[:],
-			Size:     packageIndexHashes.size,
-		},
-		deb.IndexSignature{
-			Filename: packagesGzipDistPath,
-			Checksum: packageIndexGzipHashes.sha256[:],
-			Size:     packageIndexGzipHashes.size,
-		},
-	)
-	if err != nil {
-		return fmt.Errorf("%s: %w", dist.indexPath(), err)
-	}
-	if err := uploadReleaseIndex(ctx, bucket, dist, release, keyID); err != nil {
+	if err := uploadReleaseIndex(ctx, bucket, comp.dist, release, keyID); err != nil {
 		return err
 	}
 
@@ -278,23 +259,51 @@ func main() {
 			return cmdInit(cmd.Context(), bucket, distribution(args[1]), *keyID)
 		},
 	})
-	rootCmd.AddCommand(&cobra.Command{
-		Use:                   "upload [options] BUCKET DIST DEB",
-		Short:                 "Upload a deb package",
-		Args:                  cobra.ExactArgs(3),
+	uploadCmd := &cobra.Command{
+		Use:                   "upload [options] BUCKET DIST PACKAGE [...]",
+		Short:                 "Upload one or more packages",
+		Args:                  cobra.MinimumNArgs(3),
 		DisableFlagsInUseLine: true,
 		SilenceErrors:         true,
 		SilenceUsage:          true,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			bucket, err := blob.OpenBucket(cmd.Context(), args[0])
-			if err != nil {
-				return err
-			}
-			return cmdUpload(cmd.Context(), bucket, distribution(args[1]), *keyID, args[2])
-		},
-	})
+	}
+	uploadComponentName := uploadCmd.Flags().StringP("component", "c", "main", "component name")
+	uploadCmd.RunE = func(cmd *cobra.Command, args []string) error {
+		bucket, err := blob.OpenBucket(cmd.Context(), args[0])
+		if err != nil {
+			return err
+		}
+		comp := component{
+			dist: distribution(args[1]),
+			name: *uploadComponentName,
+		}
+		return cmdUpload(cmd.Context(), bucket, comp, *keyID, args[2:])
+	}
+	rootCmd.AddCommand(uploadCmd)
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "aptblob:", err)
 		os.Exit(1)
 	}
+}
+
+func addToTokenSet(para *deb.Paragraph, key string, s string) {
+	var f *deb.Field
+	for i := range *para {
+		if (*para)[i].Name == key {
+			f = &(*para)[i]
+		}
+	}
+	if f == nil {
+		*para = append(*para, deb.Field{Name: key, Value: s})
+		return
+	}
+	elems := strings.Fields(f.Value)
+	for _, e := range elems {
+		if e == s {
+			return
+		}
+	}
+	elems = append(elems, s)
+	f.Value = strings.Join(elems, " ")
+	return
 }

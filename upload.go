@@ -23,18 +23,17 @@ import (
 	"crypto/md5"
 	"crypto/sha1"
 	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
 
 	"gocloud.dev/blob"
 	"zombiezen.com/go/aptblob/internal/deb"
 )
-
-func poolPath(name string) string {
-	return "pool/" + name
-}
 
 type distribution string
 
@@ -147,6 +146,46 @@ func uploadPackageIndex(ctx context.Context, bucket *blob.Bucket, comp component
 		return indexHashes{}, indexHashes{}, err
 	}
 	return
+}
+
+func uploadBinaryPackage(ctx context.Context, bucket *blob.Bucket, debPath string) (deb.Paragraph, error) {
+	debName := filepath.Base(debPath)
+	debFile, err := os.Open(debPath)
+	if err != nil {
+		return nil, fmt.Errorf("upload binary package %s: %w", debName, err)
+	}
+	defer debFile.Close()
+	control, err := deb.ExtractControl(debFile)
+	if err != nil {
+		return nil, fmt.Errorf("upload binary package %s: %w", debName, err)
+	}
+	p := deb.NewParser(bytes.NewReader(control))
+	p.Fields = deb.ControlFields
+	if !p.Single() {
+		if err := p.Err(); err != nil {
+			return nil, fmt.Errorf("upload binary package %s: %w", debName, err)
+		}
+	}
+	pkg := p.Paragraph()
+	promotePackageField(pkg)
+	arch := pkg.Get("Architecture")
+	if arch == "" {
+		return nil, fmt.Errorf("upload binary package %s: missing Architecture field", debName)
+	}
+	packageHashes, err := upload(ctx, bucket, poolPath(debName), "application/vnd.debian.binary-package", "immutable", debFile)
+	if err != nil {
+		return nil, fmt.Errorf("upload binary package %s: %w", debName, err)
+	}
+	pkg.Set("Filename", poolPath(debName))
+	pkg.Set("Size", strconv.FormatInt(packageHashes.size, 10))
+	pkg.Set("MD5sum", hex.EncodeToString(packageHashes.md5[:]))
+	pkg.Set("SHA1", hex.EncodeToString(packageHashes.sha1[:]))
+	pkg.Set("SHA256", hex.EncodeToString(packageHashes.sha256[:]))
+	return pkg, nil
+}
+
+func poolPath(name string) string {
+	return "pool/" + name
 }
 
 func upload(ctx context.Context, bucket *blob.Bucket, key string, contentType, cacheControl string, content io.ReadSeeker) (indexHashes, error) {

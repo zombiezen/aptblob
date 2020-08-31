@@ -13,7 +13,6 @@ Origin: stable
 Label: stable
 Codename: stable
 Architectures: amd64
-Components: main
 Description: Apt repository for Foo
 EOF
 
