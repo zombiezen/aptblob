@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"gocloud.dev/blob"
@@ -48,6 +49,7 @@ func cmdInit(ctx context.Context, bucket *blob.Bucket, dist distribution, keyID 
 			newRelease.Set(k, v)
 		}
 	}
+	newRelease.Set("Date", time.Now().UTC().Format("Mon, 02 Jan 2006 15:04:05 Z"))
 	err = uploadReleaseIndex(ctx, bucket, dist, newRelease, keyID)
 	if err != nil {
 		return err
@@ -133,6 +135,7 @@ func cmdUpload(ctx context.Context, bucket *blob.Bucket, comp component, keyID s
 		return err
 	}
 
+	release.Set("Date", time.Now().UTC().Format("Mon, 02 Jan 2006 15:04:05 Z"))
 	if err := uploadReleaseIndex(ctx, bucket, comp.dist, release, keyID); err != nil {
 		return err
 	}
