@@ -36,6 +36,7 @@ import (
 	"strings"
 
 	"gocloud.dev/blob"
+	"golang.org/x/crypto/openpgp/clearsign"
 	"zombiezen.com/go/aptblob/internal/deb"
 )
 
@@ -196,7 +197,7 @@ func uploadSourcePackage(ctx context.Context, bucket *blob.Bucket, dscPath strin
 	if err != nil {
 		return nil, fmt.Errorf("upload source package %s: %w", packageName, err)
 	}
-	p := deb.NewParser(bytes.NewReader(dsc))
+	p := deb.NewParser(bytes.NewReader(maybeClearSigned(dsc)))
 	p.Fields = deb.SourceControlFields
 	if !p.Single() {
 		if err := p.Err(); err != nil {
@@ -210,6 +211,11 @@ func uploadSourcePackage(ctx context.Context, bucket *blob.Bucket, dscPath strin
 	files, err := deb.ParseIndexSignatures(pkg.Get("Files"), md5.Size)
 	if err != nil {
 		return nil, fmt.Errorf("upload source package %s: files: %w", packageName, err)
+	}
+
+	_, err = upload(ctx, bucket, dir+"/"+filepath.Base(dscPath), "text/plain; charset=utf-8", "immutable", bytes.NewReader(dsc))
+	if err != nil {
+		return nil, fmt.Errorf("upload source package %s: %s: %w", packageName, filepath.Base(dscPath), err)
 	}
 	for _, sig := range files {
 		fname := sig.Filename
@@ -228,6 +234,16 @@ func uploadSourcePackage(ctx context.Context, bucket *blob.Bucket, dscPath strin
 		}
 	}
 	return pkg, nil
+}
+
+// maybeClearSigned returns the plaintext of a file that may or may not be
+// wrapped in GPG clear-signed armor.
+func maybeClearSigned(data []byte) []byte {
+	block, _ := clearsign.Decode(data)
+	if block == nil {
+		return data
+	}
+	return block.Plaintext
 }
 
 // promotePackageField ensures the Package field is the first in the paragraph.
