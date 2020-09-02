@@ -35,6 +35,14 @@ import (
 )
 
 func cmdInit(ctx context.Context, bucket *blob.Bucket, dist distribution, keyID string) error {
+	if keyID == "" {
+		if signed, err := isDistributionSigned(ctx, bucket, dist); err != nil {
+			return err
+		} else if signed {
+			return errors.New("distribution is signed but key ID not provided")
+		}
+	}
+
 	fmt.Fprintln(os.Stderr, "aptblob: reading Release from stdin...")
 	newRelease, err := deb.ParseReleaseIndex(os.Stdin)
 	if err != nil {
@@ -76,6 +84,14 @@ func downloadReleaseIndex(ctx context.Context, bucket *blob.Bucket, dist distrib
 }
 
 func cmdUpload(ctx context.Context, bucket *blob.Bucket, comp component, keyID string, paths []string) error {
+	if keyID == "" {
+		if signed, err := isDistributionSigned(ctx, bucket, comp.dist); err != nil {
+			return err
+		} else if signed {
+			return errors.New("distribution is signed but key ID not provided")
+		}
+	}
+
 	release, err := downloadReleaseIndex(ctx, bucket, comp.dist)
 	if err != nil {
 		return err
@@ -299,6 +315,21 @@ func updateSignature(para *deb.Paragraph, key string, newSigs ...deb.IndexSignat
 	}
 	para.Set(key, sb.String())
 	return nil
+}
+
+func isDistributionSigned(ctx context.Context, bucket *blob.Bucket, dist distribution) (bool, error) {
+	exists, err := bucket.Exists(ctx, dist.indexSignaturePath())
+	if err != nil {
+		return false, fmt.Errorf("check distribution signature: %w", err)
+	}
+	if exists {
+		return true, nil
+	}
+	exists, err = bucket.Exists(ctx, dist.signedIndexPath())
+	if err != nil {
+		return false, err
+	}
+	return exists, nil
 }
 
 func main() {
