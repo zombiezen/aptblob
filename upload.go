@@ -36,6 +36,7 @@ import (
 	"strings"
 
 	"gocloud.dev/blob"
+	"gocloud.dev/gcerrors"
 	"golang.org/x/crypto/openpgp/clearsign"
 	"zombiezen.com/go/aptblob/internal/deb"
 )
@@ -135,7 +136,9 @@ func uploadIndex(ctx context.Context, bucket *blob.Bucket, key string, packages 
 	if err := deb.Save(buf, packages); err != nil {
 		return indexHashes{}, indexHashes{}, err
 	}
-	uncompressed, err = upload(ctx, bucket, key, "text/plain; charset=utf-8", "", bytes.NewReader(buf.Bytes()))
+	uncompressed, err = upload(ctx, bucket, key, bytes.NewReader(buf.Bytes()), uploadOptions{
+		contentType: "text/plain; charset=utf-8",
+	})
 	if err != nil {
 		return indexHashes{}, indexHashes{}, err
 	}
@@ -147,7 +150,9 @@ func uploadIndex(ctx context.Context, bucket *blob.Bucket, key string, packages 
 	if err := zw.Close(); err != nil {
 		return indexHashes{}, indexHashes{}, fmt.Errorf("compress %s: %w", key, err)
 	}
-	gzipped, err = upload(ctx, bucket, key+gzipExtension, "application/gzip", "", bytes.NewReader(gzipBuf.Bytes()))
+	gzipped, err = upload(ctx, bucket, key+gzipExtension, bytes.NewReader(gzipBuf.Bytes()), uploadOptions{
+		contentType: "application/gzip",
+	})
 	if err != nil {
 		return indexHashes{}, indexHashes{}, err
 	}
@@ -179,7 +184,10 @@ func uploadBinaryPackage(ctx context.Context, bucket *blob.Bucket, debPath strin
 	if arch == "" {
 		return nil, fmt.Errorf("upload binary package %s: missing Architecture field", debName)
 	}
-	packageHashes, err := upload(ctx, bucket, poolPath(debName), "application/vnd.debian.binary-package", "immutable", debFile)
+	packageHashes, err := upload(ctx, bucket, poolPath(debName), debFile, uploadOptions{
+		contentType:  "application/vnd.debian.binary-package",
+		cacheControl: immutable,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("upload binary package %s: %w", debName, err)
 	}
@@ -213,7 +221,10 @@ func uploadSourcePackage(ctx context.Context, bucket *blob.Bucket, dscPath strin
 		return nil, fmt.Errorf("upload source package %s: files: %w", packageName, err)
 	}
 
-	_, err = upload(ctx, bucket, dir+"/"+filepath.Base(dscPath), "text/plain; charset=utf-8", "immutable", bytes.NewReader(dsc))
+	_, err = upload(ctx, bucket, dir+"/"+filepath.Base(dscPath), bytes.NewReader(dsc), uploadOptions{
+		contentType:  "text/plain; charset=utf-8",
+		cacheControl: immutable,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("upload source package %s: %s: %w", packageName, filepath.Base(dscPath), err)
 	}
@@ -227,7 +238,10 @@ func uploadSourcePackage(ctx context.Context, bucket *blob.Bucket, dscPath strin
 		if err != nil {
 			return nil, fmt.Errorf("upload source package %s: %s: %w", packageName, fname, err)
 		}
-		_, uploadErr := upload(ctx, bucket, dir+"/"+fname, contentType, "immutable", content)
+		_, uploadErr := upload(ctx, bucket, dir+"/"+fname, content, uploadOptions{
+			contentType:  contentType,
+			cacheControl: immutable,
+		})
 		content.Close()
 		if uploadErr != nil {
 			return nil, fmt.Errorf("upload source package %s: %s: %w", packageName, fname, err)
@@ -276,7 +290,15 @@ func poolPath(name string) string {
 	return "pool/" + name
 }
 
-func upload(ctx context.Context, bucket *blob.Bucket, key string, contentType, cacheControl string, content io.ReadSeeker) (indexHashes, error) {
+// immutable is the Cache-Control header that indicates that the content is immutable.
+const immutable = "immutable"
+
+type uploadOptions struct {
+	contentType  string
+	cacheControl string
+}
+
+func upload(ctx context.Context, bucket *blob.Bucket, key string, content io.ReadSeeker, opts uploadOptions) (indexHashes, error) {
 	if _, err := content.Seek(0, io.SeekStart); err != nil {
 		return indexHashes{}, fmt.Errorf("upload %s: %w", key, err)
 	}
@@ -296,10 +318,27 @@ func upload(ctx context.Context, bucket *blob.Bucket, key string, contentType, c
 	md5Hash.Sum(h.md5[:0])
 	sha1Hash.Sum(h.sha1[:0])
 	sha256Hash.Sum(h.sha256[:0])
+	if opts.cacheControl == immutable {
+		attr, err := bucket.Attributes(ctx, key)
+		if err == nil {
+			// Immutable objects don't have to be uploaded if they already exist,
+			// but they must match the existing object.
+			if attr.Size != h.size || !bytes.Equal(h.md5[:], attr.MD5) {
+				return indexHashes{}, fmt.Errorf("upload %s: immutable object differs", key)
+			}
+			return h, nil
+		} else if gcerrors.Code(err) != gcerrors.NotFound {
+			return indexHashes{}, fmt.Errorf("upload %s: %w", key, err)
+		}
+	}
+	if opts.cacheControl == "" {
+		// Default to 5 minute cache.
+		opts.cacheControl = "max-age=300"
+	}
 	w, err := bucket.NewWriter(ctx, key, &blob.WriterOptions{
-		ContentType:  contentType,
+		ContentType:  opts.contentType,
 		ContentMD5:   h.md5[:],
-		CacheControl: cacheControl,
+		CacheControl: opts.cacheControl,
 	})
 	if err != nil {
 		return indexHashes{}, fmt.Errorf("upload %s: %w", key, err)

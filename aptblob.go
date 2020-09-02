@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -155,7 +156,10 @@ func appendToIndex(ctx context.Context, bucket *blob.Bucket, dist distribution, 
 	}
 
 	// Append packages to index.
-	packages = append(packages, newParagraphs...)
+	packages, err = dedupePackages(append(packages, newParagraphs...))
+	if err != nil {
+		return err
+	}
 	indexHashes, gzipIndexHashes, err := uploadIndex(ctx, bucket, key, packages)
 	if err != nil {
 		return err
@@ -231,6 +235,32 @@ func downloadIndex(ctx context.Context, bucket *blob.Bucket, key string, fields 
 		return nil, fmt.Errorf("%s: %w", key, err)
 	}
 	return paragraphs, nil
+}
+
+func dedupePackages(packages []deb.Paragraph) ([]deb.Paragraph, error) {
+	type packageVersion struct {
+		name    string
+		version string
+	}
+	index := make(map[packageVersion]int)
+	n := 0
+	for _, pkg := range packages {
+		v := packageVersion{
+			name:    pkg.Get("Package"),
+			version: pkg.Get("Version"),
+		}
+		if v.name == "" || v.version == "" {
+			return nil, errors.New("package found without Package or Version")
+		}
+		i, seen := index[v]
+		if !seen {
+			i = n
+			n++
+		}
+		packages[i] = pkg
+		index[v] = i
+	}
+	return packages[:n], nil
 }
 
 func updateSignature(para *deb.Paragraph, key string, newSigs ...deb.IndexSignature) error {
