@@ -90,7 +90,12 @@ func uploadReleaseIndex(ctx context.Context, bucket *blob.Bucket, dist distribut
 		return nil
 	}
 
-	clearSign := exec.CommandContext(ctx, "gpg", "-a", "-u", keyID+"!", "--clear-sign")
+	clearSign := exec.CommandContext(ctx, "gpg",
+		"--batch",
+		"--armor",
+		"--local-user", keyID+"!",
+		"--clear-sign",
+	)
 	clearSign.Stdin = bytes.NewReader(data.Bytes())
 	clearSignOutput := new(bytes.Buffer)
 	clearSign.Stdout = clearSignOutput
@@ -105,7 +110,12 @@ func uploadReleaseIndex(ctx context.Context, bucket *blob.Bucket, dist distribut
 		return fmt.Errorf("upload InRelease: %w", err)
 	}
 
-	detachSign := exec.CommandContext(ctx, "gpg", "-a", "-u", keyID+"!", "--detach-sign")
+	detachSign := exec.CommandContext(ctx, "gpg",
+		"--batch",
+		"--armor",
+		"--local-user", keyID+"!",
+		"--detach-sign",
+	)
 	detachSign.Stdin = bytes.NewReader(data.Bytes())
 	detachSignOutput := new(bytes.Buffer)
 	detachSign.Stdout = detachSignOutput
