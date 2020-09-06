@@ -36,9 +36,16 @@ func TestParser(t *testing.T) {
 		},
 		{
 			name:   "SingleField",
-			source: "Package: libc6\n",
+			source: "Package:libc6\n",
 			want: []Paragraph{
 				{{Name: "Package", Value: "libc6"}},
+			},
+		},
+		{
+			name:   "Whitespace",
+			source: "Version:  \t libc6 (= 6.1) \t  \n",
+			want: []Paragraph{
+				{{Name: "Version", Value: "libc6 (= 6.1)"}},
 			},
 		},
 		{
@@ -91,7 +98,7 @@ func TestParser(t *testing.T) {
 			source: "Description: Hello World\n",
 			fields: map[string]FieldType{"Description": Multiline},
 			want: []Paragraph{
-				{{Name: "Description", Value: " Hello World"}},
+				{{Name: "Description", Value: "Hello World"}},
 			},
 		},
 		{
@@ -99,7 +106,7 @@ func TestParser(t *testing.T) {
 			source: "Description: Hello World\n Extended description\n",
 			fields: map[string]FieldType{"Description": Multiline},
 			want: []Paragraph{
-				{{Name: "Description", Value: " Hello World\n Extended description"}},
+				{{Name: "Description", Value: "Hello World\n Extended description"}},
 			},
 		},
 		{
@@ -115,7 +122,7 @@ func TestParser(t *testing.T) {
 			source: "Description: \n Extended description\n",
 			fields: map[string]FieldType{"Description": Multiline},
 			want: []Paragraph{
-				{{Name: "Description", Value: " \n Extended description"}},
+				{{Name: "Description", Value: "\n Extended description"}},
 			},
 		},
 
@@ -210,4 +217,83 @@ func TestParser(t *testing.T) {
 			})
 		}
 	})
+}
+
+func TestSave(t *testing.T) {
+	tests := []struct {
+		name       string
+		paragraphs []Paragraph
+		want       string
+	}{
+		{
+			name: "Empty",
+			want: "",
+		},
+		{
+			name: "SingleField",
+			paragraphs: []Paragraph{
+				{
+					{"Package", "libc6"},
+				},
+			},
+			want: "Package: libc6\n",
+		},
+		{
+			name: "Whitespace",
+			paragraphs: []Paragraph{
+				{
+					{"Version", "  \t libc6 (= 6.1) \t  "},
+				},
+			},
+			want: "Version: libc6 (= 6.1)\n",
+		},
+		{
+			name: "TwoFields",
+			paragraphs: []Paragraph{
+				{
+					{"Package", "libc6"},
+					{"Version", "1:6.2"},
+				},
+			},
+			want: "Package: libc6\nVersion: 1:6.2\n",
+		},
+		{
+			name: "Multiline/WithFirst",
+			paragraphs: []Paragraph{
+				{
+					{"Description", "Do nothing\n Totally here just to do nothing"},
+				},
+			},
+			want: "Description: Do nothing\n Totally here just to do nothing\n",
+		},
+		{
+			name: "Multiline/WithoutFirst",
+			paragraphs: []Paragraph{
+				{
+					{"Description", "\n Totally here just to do nothing"},
+				},
+			},
+			want: "Description:\n Totally here just to do nothing\n",
+		},
+		{
+			name: "Multiline/FirstLineWhitespace",
+			paragraphs: []Paragraph{
+				{
+					{"Description", "  \t \n Totally here just to do nothing"},
+				},
+			},
+			want: "Description:\n Totally here just to do nothing\n",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := new(strings.Builder)
+			if err := Save(got, test.paragraphs); err != nil {
+				t.Error("Save:", err)
+			}
+			if diff := cmp.Diff(test.want, got.String()); diff != "" {
+				t.Errorf("Output (-want +got):\n%s", diff)
+			}
+		})
+	}
 }

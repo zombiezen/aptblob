@@ -177,14 +177,15 @@ func (p *Parser) Next() bool {
 				return false
 
 			}
-			field.Value = strings.TrimSpace(text[colon+1 : valueEnd])
+			field.Value = text[colon+1 : valueEnd]
 		case Folded:
-			field.Value = strings.ReplaceAll(strings.TrimSpace(text[colon+1:valueEnd]), "\n", "")
+			field.Value = strings.ReplaceAll(text[colon+1:valueEnd], "\n", "")
 		case Multiline:
 			field.Value = text[colon+1 : valueEnd]
 		default:
 			panic("unknown field type")
 		}
+		field.Value = strings.Trim(field.Value, " \t")
 		if field.Value == "" {
 			p.clear()
 			p.err = fmt.Errorf("parse debian control file: line %d: empty field %q", startLine, field.Name)
@@ -262,10 +263,15 @@ func (f Field) write(w io.Writer) error {
 	if _, err := io.WriteString(w, f.Name); err != nil {
 		return err
 	}
-	if _, err := w.Write(fieldSep); err != nil {
+	val := strings.Trim(f.Value, " \t")
+	sepN := len(fieldSep)
+	if strings.HasPrefix(val, "\n") {
+		sepN = 1
+	}
+	if _, err := w.Write(fieldSep[:sepN]); err != nil {
 		return err
 	}
-	if _, err := io.WriteString(w, f.Value); err != nil {
+	if _, err := io.WriteString(w, val); err != nil {
 		return err
 	}
 	return nil
