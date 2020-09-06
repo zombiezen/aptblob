@@ -183,10 +183,7 @@ func uploadBinaryPackage(ctx context.Context, bucket *blob.Bucket, debPath strin
 	p := deb.NewParser(bytes.NewReader(control))
 	p.Fields = deb.ControlFields
 	if !p.Single() {
-		if err := p.Err(); err != nil {
-			return nil, fmt.Errorf("upload binary package %s: control: %w", debName, err)
-		}
-		return nil, fmt.Errorf("upload binary package %s: control: empty file", debName)
+		return nil, fmt.Errorf("upload binary package %s: control: %w", debName, p.Err())
 	}
 	pkg := p.Paragraph()
 	promotePackageField(pkg)
@@ -218,10 +215,7 @@ func uploadSourcePackage(ctx context.Context, bucket *blob.Bucket, dscPath strin
 	p := deb.NewParser(bytes.NewReader(maybeClearSigned(dsc)))
 	p.Fields = deb.SourceControlFields
 	if !p.Single() {
-		if err := p.Err(); err != nil {
-			return nil, fmt.Errorf("upload source package %s: %w", packageName, err)
-		}
-		return nil, fmt.Errorf("upload source package %s: empty file", packageName)
+		return nil, fmt.Errorf("upload source package %s: %w", packageName, p.Err())
 	}
 	pkg := p.Paragraph()
 	dir := poolPath(packageName)

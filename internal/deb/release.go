@@ -28,19 +28,18 @@ import (
 // https://wiki.debian.org/DebianRepository/Format#A.22Release.22_files
 func ParseReleaseIndex(r io.Reader) (Paragraph, error) {
 	p := NewParser(r)
-	p.Fields = map[string]FieldType{
-		"MD5Sum": Multiline,
-		"SHA1":   Multiline,
-		"SHA256": Multiline,
-	}
+	p.Fields = ReleaseFields
 	if !p.Single() {
-		err := p.Err()
-		if err == nil {
-			err = io.ErrUnexpectedEOF
-		}
-		return nil, fmt.Errorf("parse Release: %w", err)
+		return nil, fmt.Errorf("parse Release: %w", p.Err())
 	}
 	return p.Paragraph(), nil
+}
+
+// ReleaseFields is the set of fields in the release information file.
+var ReleaseFields = map[string]FieldType{
+	"MD5Sum": Multiline,
+	"SHA1":   Multiline,
+	"SHA256": Multiline,
 }
 
 type IndexSignature struct {

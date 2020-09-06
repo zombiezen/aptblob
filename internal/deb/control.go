@@ -79,7 +79,8 @@ func NewParser(r io.Reader) *Parser {
 // Single parses a single-paragraph control file, which will then be available
 // through the Paragraph method. It returns false if the method is called after
 // any call to Next, the parser stops before reading a paragraph, or the parser
-// encounters a syntax error.
+// encounters a syntax error. If Single returns false, Err() will always return
+// an error.
 func (p *Parser) Single() bool {
 	if p.err != nil {
 		return false
@@ -90,6 +91,9 @@ func (p *Parser) Single() bool {
 		return false
 	}
 	if !p.Next() {
+		if p.err == nil {
+			p.err = fmt.Errorf("parse debian control file: %w", io.ErrUnexpectedEOF)
+		}
 		return false
 	}
 
