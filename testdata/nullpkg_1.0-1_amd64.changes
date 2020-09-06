@@ -1,0 +1,34 @@
+Format: 1.8
+Date: Sat, 05 Sep 2020 18:17:14 -0700
+Source: nullpkg
+Binary: nullpkg
+Architecture: source amd64
+Version: 1.0-1
+Distribution: UNRELEASED
+Urgency: medium
+Maintainer: Ross Light <ross@zombiezen.com>
+Changed-By: Ross Light <ross@zombiezen.com>
+Description:
+ nullpkg    - Do nothing
+Changes:
+ nullpkg (1.0-1) UNRELEASED; urgency=medium
+ .
+   * Initial release. (Closes: #XXXXXX)
+Checksums-Sha1:
+ f6773dd140eec876386f4d0c98330597b1aea43e 742 nullpkg_1.0-1.dsc
+ e77b8cd6a21289abd88d8195273a692b7a67cab5 121 nullpkg_1.0.orig.tar.gz
+ f949ed3c2b430378c6ba676a21c986c953c90521 640 nullpkg_1.0-1.debian.tar.xz
+ b080a1f24aff3197149da393cde3bfe8e705eafa 4856 nullpkg_1.0-1_amd64.buildinfo
+ 946b761b186ffcce7e457d6a75355c1450238859 1124 nullpkg_1.0-1_amd64.deb
+Checksums-Sha256:
+ 63d2f9a11cd0b2df7d985c0dd2dbbd5c549ab3b64a18867e0c08c1335f556448 742 nullpkg_1.0-1.dsc
+ 5bf21f0c62248b89a88ef2f00296ef744c29e589dfb53e50eba55e928ad06e0c 121 nullpkg_1.0.orig.tar.gz
+ 35dc7a93ca59195bc7a897e785aaaba00935943a16815bdb263f348da3042bf5 640 nullpkg_1.0-1.debian.tar.xz
+ 61a9f608026376c259802f39a3acabcedb7ba732d25ba9d96d1a487d707701d7 4856 nullpkg_1.0-1_amd64.buildinfo
+ 6def2db1420e3fc5528a3e1672af87158619ae27d82562c4c155154e68b393b7 1124 nullpkg_1.0-1_amd64.deb
+Files:
+ e35b540f51fe339873bba51c8726f678 742 misc optional nullpkg_1.0-1.dsc
+ 553a0f3ac9d12929fe08c01c3211fdb1 121 misc optional nullpkg_1.0.orig.tar.gz
+ bbd67ff58e0e03cc699ad83778e87081 640 misc optional nullpkg_1.0-1.debian.tar.xz
+ 4093577249307c7d7b76c388d1fdbad8 4856 misc optional nullpkg_1.0-1_amd64.buildinfo
+ bfd9f5f13f02ee8624835719d31ebdb7 1124 misc optional nullpkg_1.0-1_amd64.deb

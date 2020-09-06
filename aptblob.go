@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,7 +35,7 @@ import (
 	"zombiezen.com/go/aptblob/internal/deb"
 )
 
-func cmdInit(ctx context.Context, bucket *blob.Bucket, dist distribution, keyID string) error {
+func cmdInit(ctx context.Context, bucket *blob.Bucket, stdin io.Reader, stderr io.Writer, dist distribution, keyID string) error {
 	if keyID == "" {
 		if signed, err := isDistributionSigned(ctx, bucket, dist); err != nil {
 			return err
@@ -43,8 +44,8 @@ func cmdInit(ctx context.Context, bucket *blob.Bucket, dist distribution, keyID 
 		}
 	}
 
-	fmt.Fprintln(os.Stderr, "aptblob: reading Release from stdin...")
-	newRelease, err := deb.ParseReleaseIndex(os.Stdin)
+	fmt.Fprintln(stderr, "aptblob: reading Release from stdin...")
+	newRelease, err := deb.ParseReleaseIndex(stdin)
 	if err != nil {
 		return fmt.Errorf("read stdin: %w", err)
 	}
@@ -359,7 +360,7 @@ func main() {
 			if err != nil {
 				return err
 			}
-			return cmdInit(cmd.Context(), bucket, distribution(args[1]), *keyID)
+			return cmdInit(cmd.Context(), bucket, os.Stdin, os.Stderr, distribution(args[1]), *keyID)
 		},
 	})
 	uploadCmd := &cobra.Command{

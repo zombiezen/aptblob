@@ -14,3 +14,10 @@
 
 # Output of the go coverage tool, specifically when used with LiteIDE
 *.out
+
+# Test Debian package
+/testdata/nullpkg-1.0/debian/.debhelper/
+/testdata/nullpkg-1.0/debian/debhelper-build-stamp
+/testdata/nullpkg-1.0/debian/files
+/testdata/nullpkg-1.0/debian/nullpkg.substvars
+/testdata/nullpkg-1.0/debian/nullpkg/

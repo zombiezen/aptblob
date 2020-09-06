@@ -1,0 +1,54 @@
+ dpkg-buildpackage -us -uc -ui
+dpkg-buildpackage: info: source package nullpkg
+dpkg-buildpackage: info: source version 1.0-1
+dpkg-buildpackage: info: source distribution UNRELEASED
+dpkg-buildpackage: info: source changed by Ross Light <ross@zombiezen.com>
+ dpkg-source --before-build .
+dpkg-buildpackage: info: host architecture amd64
+ fakeroot debian/rules clean
+dh clean
+   dh_clean
+ dpkg-source -b .
+dpkg-source: info: using source format '3.0 (quilt)'
+dpkg-source: info: building nullpkg using existing ./nullpkg_1.0.orig.tar.gz
+dpkg-source: info: building nullpkg in nullpkg_1.0-1.debian.tar.xz
+dpkg-source: info: building nullpkg in nullpkg_1.0-1.dsc
+ debian/rules build
+dh build
+   dh_update_autotools_config
+   dh_autoreconf
+   create-stamp debian/debhelper-build-stamp
+ fakeroot debian/rules binary
+dh binary
+   dh_testroot
+   dh_prep
+   dh_installdocs
+   dh_installchangelogs
+   dh_perl
+   dh_link
+   dh_strip_nondeterminism
+   dh_compress
+   dh_fixperms
+   dh_missing
+   dh_strip
+   dh_makeshlibs
+   dh_shlibdeps
+   dh_installdeb
+   dh_gencontrol
+dpkg-gencontrol: warning: Depends field of package nullpkg: substitution variable ${shlibs:Depends} used, but is not defined
+   dh_md5sums
+   dh_builddeb
+dpkg-deb: building package 'nullpkg' in '../nullpkg_1.0-1_amd64.deb'.
+ dpkg-genbuildinfo
+ dpkg-genchanges  >../nullpkg_1.0-1_amd64.changes
+dpkg-genchanges: info: including full source code in upload
+ dpkg-source --after-build .
+dpkg-buildpackage: info: full upload (original source is included)
+Now running lintian nullpkg_1.0-1_amd64.changes ...
+W: nullpkg source: ancient-standards-version 3.9.2 (released 2011-04-07) (current is 4.3.0)
+W: nullpkg: wrong-bug-number-in-closes l3:#XXXXXX
+W: nullpkg: new-package-should-close-itp-bug
+W: nullpkg: copyright-without-copyright-notice
+W: nullpkg: empty-binary-package
+W: nullpkg: zero-byte-file-in-doc-directory usr/share/doc/nullpkg/copyright
+Finished running lintian.

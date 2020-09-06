@@ -1,0 +1,12 @@
+Source: nullpkg
+Maintainer: Ross Light <ross@zombiezen.com>
+Section: misc
+Priority: optional
+Standards-Version: 3.9.2
+Build-Depends: debhelper (>= 11)
+
+Package: nullpkg
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Do nothing
+ Totally here just to do nothing
